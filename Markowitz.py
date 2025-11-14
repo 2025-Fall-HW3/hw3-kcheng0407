@@ -37,8 +37,8 @@ end = "2024-04-01"
 # Initialize df and df_returns
 df = pd.DataFrame()
 for asset in assets:
-    raw = yf.download(asset, start=start, end=end, auto_adjust = False)
-    df[asset] = raw['Adj Close']
+    raw = yf.download(asset, start=start, end=end, auto_adjust=False)
+    df[asset] = raw["Adj Close"]
 
 df_returns = df.pct_change().fillna(0)
 
@@ -59,13 +59,13 @@ class EqualWeightPortfolio:
         assets = df.columns[df.columns != self.exclude]
         self.portfolio_weights = pd.DataFrame(index=df.index, columns=df.columns)
 
-        """
-        TODO: Complete Task 1 Below
-        """
+        # 等權重，不包含 exclude (SPY)
+        n_assets = len(assets)
+        # 先全部設成 0
+        self.portfolio_weights.loc[:, :] = 0.0
+        # 對所有日期，非 SPY 的資產給 1/n 權重
+        self.portfolio_weights[assets] = 1.0 / n_assets
 
-        """
-        TODO: Complete Task 1 Above
-        """
         self.portfolio_weights.ffill(inplace=True)
         self.portfolio_weights.fillna(0, inplace=True)
 
@@ -110,15 +110,28 @@ class RiskParityPortfolio:
         # Calculate the portfolio weights
         self.portfolio_weights = pd.DataFrame(index=df.index, columns=df.columns)
 
-        """
-        TODO: Complete Task 2 Below
-        """
+        # 全部先設為 0
+        self.portfolio_weights.loc[:, :] = 0.0
 
+        # 仿照 MeanVariance 的 indexing：從 lookback+1 開始
+        for i in range(self.lookback + 1, len(df)):
+            # 過去 lookback 天的報酬
+            window = df_returns[assets].iloc[i - self.lookback : i]
 
+            # 每檔 ETF 的波動度
+            sigma = window.std()
 
-        """
-        TODO: Complete Task 2 Above
-        """
+            # 避免 0 波動度
+            sigma = sigma.replace(0, np.nan)
+            sigma = sigma.fillna(sigma.mean())
+            sigma = sigma.replace(0, 1e-6)
+
+            # inverse-vol 權重
+            inv_sigma = 1.0 / sigma
+            weights = inv_sigma / inv_sigma.sum()
+
+            # 寫入當天權重
+            self.portfolio_weights.loc[df.index[i], assets] = weights.values
 
         self.portfolio_weights.ffill(inplace=True)
         self.portfolio_weights.fillna(0, inplace=True)
@@ -184,39 +197,46 @@ class MeanVariancePortfolio:
             env.setParam("DualReductions", 0)
             env.start()
             with gp.Model(env=env, name="portfolio") as model:
-                """
-                TODO: Complete Task 3 Below
-                """
+                # 決策變數 w_i，0 <= w_i <= 1
+                w = model.addMVar(n, lb=0.0, ub=1.0, name="w")
 
-                # Sample Code: Initialize Decision w and the Objective
-                # NOTE: You can modify the following code
-                w = model.addMVar(n, name="w", ub=1)
-                model.setObjective(w.sum(), gp.GRB.MAXIMIZE)
+                # 預算約束：sum w_i = 1
+                model.addConstr(w.sum() == 1.0, name="budget")
 
-                """
-                TODO: Complete Task 3 Above
-                """
+                # 線性部分：mu^T w
+                ret = gp.quicksum(float(mu[j]) * w[j] for j in range(n))
+
+                # 二次部分：w^T Sigma w
+                risk = gp.quicksum(
+                    float(Sigma[i, j]) * w[i] * w[j]
+                    for i in range(n)
+                    for j in range(n)
+                )
+
+                # 目標：max mu^T w - 0.5 * gamma * w^T Sigma w
+                obj = ret - 0.5 * gamma * risk
+                model.setObjective(obj, gp.GRB.MAXIMIZE)
+
                 model.optimize()
 
-                # Check if the status is INF_OR_UNBD (code 4)
+                # 狀態檢查
                 if model.status == gp.GRB.INF_OR_UNBD:
                     print(
                         "Model status is INF_OR_UNBD. Reoptimizing with DualReductions set to 0."
                     )
                 elif model.status == gp.GRB.INFEASIBLE:
-                    # Handle infeasible model
                     print("Model is infeasible.")
                 elif model.status == gp.GRB.INF_OR_UNBD:
-                    # Handle infeasible or unbounded model
                     print("Model is infeasible or unbounded.")
 
-                if model.status == gp.GRB.OPTIMAL or model.status == gp.GRB.SUBOPTIMAL:
-                    # Extract the solution
-                    solution = []
+                solution = []
+                if model.status in (gp.GRB.OPTIMAL, gp.GRB.SUBOPTIMAL):
                     for i in range(n):
                         var = model.getVarByName(f"w[{i}]")
-                        # print(f"w {i} = {var.X}")
                         solution.append(var.X)
+                else:
+                    # 如果沒拿到解，就退回等權重
+                    solution = [1.0 / n] * n
 
         return solution
 
@@ -249,34 +269,28 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Introduction to Fintech Assignment 3 Part 1"
     )
-    """
-    NOTE: For Assignment Judge
-    """
+
     parser.add_argument(
         "--score",
         action="append",
         help="Score for assignment",
     )
-
     parser.add_argument(
         "--allocation",
         action="append",
         help="Allocation for asset",
     )
-
     parser.add_argument(
         "--performance",
         action="append",
         help="Performance for portfolio",
     )
-
     parser.add_argument(
-        "--report", action="append", help="Report for evaluation metric"
+        "--report",
+        action="append",
+        help="Report for evaluation metric",
     )
 
     args = parser.parse_args()
-
     judge = AssignmentJudge()
-    
-    # All grading logic is protected in grader.py
     judge.run_grading(args)
