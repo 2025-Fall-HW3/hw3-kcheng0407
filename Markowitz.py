@@ -1,6 +1,3 @@
-"""
-Package Import
-"""
 import yfinance as yf
 import numpy as np
 import pandas as pd
@@ -11,9 +8,6 @@ import argparse
 import warnings
 import sys
 
-"""
-Project Setup
-"""
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 assets = [
@@ -34,7 +28,6 @@ assets = [
 start = "2019-01-01"
 end = "2024-04-01"
 
-# Initialize df and df_returns
 df = pd.DataFrame()
 for asset in assets:
     raw = yf.download(asset, start=start, end=end, auto_adjust=False)
@@ -43,38 +36,25 @@ for asset in assets:
 df_returns = df.pct_change().fillna(0)
 
 
-"""
-Problem 1: 
-
-Implement an equal weighting strategy as dataframe "eqw". Please do "not" include SPY.
-"""
-
-
 class EqualWeightPortfolio:
     def __init__(self, exclude):
         self.exclude = exclude
 
     def calculate_weights(self):
-        # Get the assets by excluding the specified column
         assets = df.columns[df.columns != self.exclude]
         self.portfolio_weights = pd.DataFrame(index=df.index, columns=df.columns)
 
-        # 等權重，不包含 exclude (SPY)
         n_assets = len(assets)
-        # 先全部設成 0
         self.portfolio_weights.loc[:, :] = 0.0
-        # 對所有日期，非 SPY 的資產給 1/n 權重
         self.portfolio_weights[assets] = 1.0 / n_assets
 
         self.portfolio_weights.ffill(inplace=True)
         self.portfolio_weights.fillna(0, inplace=True)
 
     def calculate_portfolio_returns(self):
-        # Ensure weights are calculated
         if not hasattr(self, "portfolio_weights"):
             self.calculate_weights()
 
-        # Calculate the portfolio returns
         self.portfolio_returns = df_returns.copy()
         assets = df.columns[df.columns != self.exclude]
         self.portfolio_returns["Portfolio"] = (
@@ -84,18 +64,10 @@ class EqualWeightPortfolio:
         )
 
     def get_results(self):
-        # Ensure portfolio returns are calculated
         if not hasattr(self, "portfolio_returns"):
             self.calculate_portfolio_returns()
 
         return self.portfolio_weights, self.portfolio_returns
-
-
-"""
-Problem 2:
-
-Implement a risk parity strategy as dataframe "rp". Please do "not" include SPY.
-"""
 
 
 class RiskParityPortfolio:
@@ -104,44 +76,33 @@ class RiskParityPortfolio:
         self.lookback = lookback
 
     def calculate_weights(self):
-        # Get the assets by excluding the specified column
         assets = df.columns[df.columns != self.exclude]
 
-        # Calculate the portfolio weights
         self.portfolio_weights = pd.DataFrame(index=df.index, columns=df.columns)
 
-        # 全部先設為 0
         self.portfolio_weights.loc[:, :] = 0.0
 
-        # 仿照 MeanVariance 的 indexing：從 lookback+1 開始
         for i in range(self.lookback + 1, len(df)):
-            # 過去 lookback 天的報酬
             window = df_returns[assets].iloc[i - self.lookback : i]
 
-            # 每檔 ETF 的波動度
             sigma = window.std()
 
-            # 避免 0 波動度
             sigma = sigma.replace(0, np.nan)
             sigma = sigma.fillna(sigma.mean())
             sigma = sigma.replace(0, 1e-6)
 
-            # inverse-vol 權重
             inv_sigma = 1.0 / sigma
             weights = inv_sigma / inv_sigma.sum()
 
-            # 寫入當天權重
             self.portfolio_weights.loc[df.index[i], assets] = weights.values
 
         self.portfolio_weights.ffill(inplace=True)
         self.portfolio_weights.fillna(0, inplace=True)
 
     def calculate_portfolio_returns(self):
-        # Ensure weights are calculated
         if not hasattr(self, "portfolio_weights"):
             self.calculate_weights()
 
-        # Calculate the portfolio returns
         self.portfolio_returns = df_returns.copy()
         assets = df.columns[df.columns != self.exclude]
         self.portfolio_returns["Portfolio"] = (
@@ -151,18 +112,10 @@ class RiskParityPortfolio:
         )
 
     def get_results(self):
-        # Ensure portfolio returns are calculated
         if not hasattr(self, "portfolio_returns"):
             self.calculate_portfolio_returns()
 
         return self.portfolio_weights, self.portfolio_returns
-
-
-"""
-Problem 3:
-
-Implement a Markowitz strategy as dataframe "mv". Please do "not" include SPY.
-"""
 
 
 class MeanVariancePortfolio:
@@ -172,10 +125,8 @@ class MeanVariancePortfolio:
         self.gamma = gamma
 
     def calculate_weights(self):
-        # Get the assets by excluding the specified column
         assets = df.columns[df.columns != self.exclude]
 
-        # Calculate the portfolio weights
         self.portfolio_weights = pd.DataFrame(index=df.index, columns=df.columns)
 
         for i in range(self.lookback + 1, len(df)):
@@ -197,29 +148,23 @@ class MeanVariancePortfolio:
             env.setParam("DualReductions", 0)
             env.start()
             with gp.Model(env=env, name="portfolio") as model:
-                # 決策變數 w_i，0 <= w_i <= 1
                 w = model.addMVar(n, lb=0.0, ub=1.0, name="w")
 
-                # 預算約束：sum w_i = 1
                 model.addConstr(w.sum() == 1.0, name="budget")
 
-                # 線性部分：mu^T w
                 ret = gp.quicksum(float(mu[j]) * w[j] for j in range(n))
 
-                # 二次部分：w^T Sigma w
                 risk = gp.quicksum(
                     float(Sigma[i, j]) * w[i] * w[j]
                     for i in range(n)
                     for j in range(n)
                 )
 
-                # 目標：max mu^T w - 0.5 * gamma * w^T Sigma w
                 obj = ret - 0.5 * gamma * risk
                 model.setObjective(obj, gp.GRB.MAXIMIZE)
 
                 model.optimize()
 
-                # 狀態檢查
                 if model.status == gp.GRB.INF_OR_UNBD:
                     print(
                         "Model status is INF_OR_UNBD. Reoptimizing with DualReductions set to 0."
@@ -235,17 +180,14 @@ class MeanVariancePortfolio:
                         var = model.getVarByName(f"w[{i}]")
                         solution.append(var.X)
                 else:
-                    # 如果沒拿到解，就退回等權重
                     solution = [1.0 / n] * n
 
         return solution
 
     def calculate_portfolio_returns(self):
-        # Ensure weights are calculated
         if not hasattr(self, "portfolio_weights"):
             self.calculate_weights()
 
-        # Calculate the portfolio returns
         self.portfolio_returns = df_returns.copy()
         assets = df.columns[df.columns != self.exclude]
         self.portfolio_returns["Portfolio"] = (
@@ -255,7 +197,6 @@ class MeanVariancePortfolio:
         )
 
     def get_results(self):
-        # Ensure portfolio returns are calculated
         if not hasattr(self, "portfolio_returns"):
             self.calculate_portfolio_returns()
 
@@ -263,7 +204,6 @@ class MeanVariancePortfolio:
 
 
 if __name__ == "__main__":
-    # Import grading system (protected file in GitHub Classroom)
     from grader import AssignmentJudge
 
     parser = argparse.ArgumentParser(
